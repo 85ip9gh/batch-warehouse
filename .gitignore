@@ -1,0 +1,20 @@
+# The raw corpus is never committed. Reasons in README.md under "What is not
+# in this repository", and all three are independent of each other:
+# employer-authored posting text, third-party contact details, and size.
+data/
+warehouse/
+*.csv
+*.parquet
+!tests/fixtures/*.csv
+
+# Local environment
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
