@@ -1,0 +1,160 @@
+name: CI
+
+# No path filters, deliberately, matching the other repositories. A gate that
+# skips depending on which files a change touched is not a gate.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+  CHECKOV_IMAGE: "ghcr.io/bridgecrewio/checkov:3.3.13"
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v6.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install --requirement requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      # The corpus is not committed and never will be, so a rule that only
+      # lives in .gitignore is one `git add --force` away from being bypassed.
+      # This is the check that makes the promise enforceable.
+      - name: Refuse any committed corpus data
+        run: |
+          set -euo pipefail
+          offenders=$(git ls-files | grep -E '^data/|\.csv$|\.gz$|\.parquet$' | grep -v '^tests/fixtures/' || true)
+          if [ -n "$offenders" ]; then
+            echo "corpus data must never be committed:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "no corpus data tracked"
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --silent --show-error --fail --location --output gitleaks.tar.gz "$url"
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm -f gitleaks gitleaks.tar.gz
+          gitleaks version
+
+      # Full history rather than the diff, and --redact so nothing lands in a
+      # public run log.
+      - name: Scan git history for secrets
+        run: |
+          set -euo pipefail
+          gitleaks git . --no-banner --redact --verbose --exit-code 1 \
+            --report-format json --report-path gitleaks-report.json
+
+      - name: Upload gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  deps:
+    name: Dependency scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # ignore-unfixed is deliberately not set. A CVE with no upstream fix gets
+      # a dated, reasoned line in .trivyignore, so the judgement is recorded
+      # rather than hidden. There is no image scan yet because there is no
+      # Dockerfile; it arrives with the PostgreSQL and orchestrator work.
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+          output: trivy-fs.txt
+          hide-progress: "true"
+
+      - name: Print scan report
+        if: always()
+        run: |
+          if [ -s trivy-fs.txt ]; then cat trivy-fs.txt; else echo "no findings at HIGH or CRITICAL"; fi
+
+      - name: Upload trivy report
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: trivy-report
+          path: trivy-fs.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+  iac:
+    name: IaC misconfiguration scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # CKV_IGNORE_HIDDEN_DIRECTORIES=false because checkov skips
+      # dot-directories by default, which was proved on cube-store's gate-proof
+      # branch: a Dockerfile with no USER and no HEALTHCHECK passed cleanly
+      # inside a hidden directory and failed the moment it moved to a visible
+      # path. It is a directory flag, not a file one.
+      #
+      # Checkov has no docker_compose framework, verified against 3.3.13, so
+      # any compose file added later stays a manual review.
+      - name: Checkov
+        run: |
+          set -euo pipefail
+          docker run --rm --volume "$PWD:/repo" --workdir /repo \
+            --env CKV_IGNORE_HIDDEN_DIRECTORIES=false "$CHECKOV_IMAGE" \
+            --directory . \
+            --framework dockerfile kubernetes github_actions gitlab_ci \
+            --skip-path node_modules \
+            --skip-path '^\.git/' \
+            --skip-download \
+            --compact \
+            --quiet \
+            --output cli | tee checkov-report.txt
+
+      - name: Upload checkov report
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: checkov-report
+          path: checkov-report.txt
+          if-no-files-found: warn
+          retention-days: 30
