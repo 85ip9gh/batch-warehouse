@@ -1,0 +1,8 @@
+# Pinned to the version in the official apache/spark image the transform runs
+# in, so the venv, CI and the container agree. Drifting these apart means a
+# green local run proves nothing about the one that produces the warehouse.
+#
+# Verified 2026-08-24 on 4.1.3 under Python 3.12 and, separately, on 4.2.0 under
+# Python 3.14: all 10 Spark-layer tests pass on both, so the pin is alignment
+# rather than a workaround for a known break.
+pyspark==4.1.3

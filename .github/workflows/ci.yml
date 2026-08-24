@@ -47,6 +47,38 @@ jobs:
           fi
           echo "no corpus data tracked"
 
+  # Separate from `tests` because this one needs a JVM and a 300 MB download,
+  # and the fast suite should stay fast. It is a gate rather than a convenience:
+  # the Spark layer is where the grain and the dedup live, and until 2026-08-24
+  # nothing ran it anywhere.
+  spark-tests:
+    name: Spark tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-java@v6.0.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v6.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install --requirement requirements-dev.txt --requirement requirements-spark.txt
+
+      # BW_REQUIRE_SPARK turns the module's importorskip into a hard failure. It
+      # is the point of this job: without it a missing pyspark makes the step
+      # pass having executed no test at all, which is indistinguishable from
+      # passing and is how this module sat unrun while CI reported green.
+      - name: Run Spark-layer tests
+        env:
+          BW_REQUIRE_SPARK: "1"
+        run: python -m pytest tests/test_transform.py -q
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
