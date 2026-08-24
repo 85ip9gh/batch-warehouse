@@ -152,12 +152,72 @@ screenshots naming real people. Ingest reads `jobspy-results-*.csv` by explicit
 glob and then excludes the derived variants, rather than reading a directory, so
 nothing else can be picked up by accident.
 
+## Running it
+
+Two suites, and the split is deliberate.
+
+**The fast suite needs nothing at all.** 86 tests over ingest and the conforming
+rules: no Spark, no JVM, no network, no container runtime, well under a second.
+
+```
+pip install --requirement requirements-dev.txt
+python -m pytest -q
+```
+
+**The Spark-layer tests need pyspark and a JVM.** Ten tests covering what unit
+tests cannot reach: the observation grain, the dedup survivor, and the posting
+snapshot.
+
+```
+pip install --requirement requirements-dev.txt --requirement requirements-spark.txt
+BW_REQUIRE_SPARK=1 python -m pytest tests/test_transform.py -q
+```
+
+`BW_REQUIRE_SPARK=1` turns the module's skip into a failure. Leave it unset on a
+laptop without pyspark and the module skips, which is the point of the skip. CI
+sets it, because a suite that quietly skips itself when a dependency goes
+missing reports green for a gate that never ran.
+
+### A UDF runs in a subprocess, and a subprocess inherits the environment only
+
+Spark pickles a UDF by reference, so the Python worker imports
+`warehouse.conform` for itself in a separate process. `pytest.ini`'s `pythonpath`,
+an editable install's `.pth`, and any `sys.path` edit are all in-process, and
+none of them reach that worker. `build_session` therefore puts the source root
+on `PYTHONPATH` before the session starts.
+
+Without it the worker dies with `ModuleNotFoundError` and does not say so. It
+surfaces as a task failure, and on Windows as "Python worker exited unexpectedly
+(crashed)", which reads like a platform problem and is not one. That misreading
+cost two sessions and left these tests recorded as never having passed, when in
+fact they had never been given an importable module.
+
+### Running the transform itself
+
+Writing Parquet on Windows needs Hadoop native binaries, and the usual remedy is
+an unofficial `winutils.exe` build from a third-party repository. The official
+image needs none of it, so the transform runs there. The tests do not write, so
+they run anywhere.
+
+```
+docker run --rm -v "$PWD:/work" -w /work \
+  -e PYTHONPATH=/work/src:/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip \
+  apache/spark:4.1.3-scala2.13-java21-python3-ubuntu \
+  python3 -m warehouse.transform --landing data/landing --warehouse data/warehouse
+```
+
+Reading the landing glob logs a `FileNotFoundException` stack trace at WARN
+before it succeeds. Spark probes the literal glob string for streaming-sink
+metadata, does not find a file by that name, and says so loudly. The read then
+resolves the glob and works. It is noise, not a failure.
+
 ## Open decisions
 
-- **Spark or DuckDB.** The plan calls for Spark in local mode on the
-  workstation. If it proves too heavy, DuckDB does the same job on far less
-  memory, at the cost of the Spark keyword and in exchange for reliability. A
-  trade to make deliberately and record, not to drift into.
+- ~~**Spark or DuckDB.**~~ **Settled 2026-08-22: Spark, in local mode.** DuckDB
+  was the alternative and is closed off unless Spark proves unworkable, which it
+  has not: the transform builds the full model in about 22 seconds. Recorded
+  here rather than drifted into, which is what the open version of this entry
+  asked for.
 - **The name.** Working title only.
 
 ## What must never be claimed
