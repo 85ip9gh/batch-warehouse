@@ -5,9 +5,10 @@ Canadian tech job-posting market in PostgreSQL: immutable partitioned landing,
 a Spark transform that conforms and deduplicates, an idempotent load, and one
 query tuned against a recorded plan.
 
-**Status: the grain is written and nothing is built.** This file is deliberately
-ahead of the code, because the grain of a fact table is the decision everything
-downstream inherits, and writing it after the transform means writing down
+**Status: landing, the Spark transform, and the PostgreSQL load are built.**
+Orchestration, one tuned query, and the published read-only view are next. The
+grain was written before any transform, on purpose: it is the decision
+everything downstream inherits, and writing it afterwards means writing down
 whatever the transform happened to do.
 
 ## The data
@@ -210,6 +211,43 @@ Reading the landing glob logs a `FileNotFoundException` stack trace at WARN
 before it succeeds. Spark probes the literal glob string for streaming-sink
 metadata, does not find a file by that name, and says so loudly. The read then
 resolves the glob and works. It is noise, not a failure.
+
+## The load
+
+`warehouse.load` mirrors the Parquet warehouse into PostgreSQL, and it is the
+point where the idempotency promise becomes testable. The schema is six tables
+in a `wh` schema, two facts and four dimensions, with the grain of each fact
+restated as a table comment and every caveat that lives in this file also living
+as a column comment, so `\d+` in psql tells the same story this README does.
+
+The model has real foreign keys: every `company_key`, `location_key` and
+`source_key` on a fact references its dimension. A test loads a fact row against
+a source that is not in `dim_source` and asserts the database rejects it, so the
+keys are load-bearing rather than decorative.
+
+Two load modes, and the difference is the immutable-partition promise:
+
+- A **full** load truncates and refills every table from the current warehouse
+  in one transaction, so a posting that has left the corpus leaves the warehouse
+  too.
+- A **partition** load (`--ingest-date`) replaces exactly one ingest date in the
+  observation fact and nothing else. Reloading a date rewrites that date and no
+  other, which the load-tests job proves by loading a partition twice and
+  asserting the row count does not move.
+
+Neither `psycopg` nor `pyarrow` is imported until the load runs, so the
+SQL-shaping is unit-tested with no database in the fast suite, and the
+idempotency is tested against a Postgres service container in a separate job
+gated by `BW_REQUIRE_PG=1`, the same way the Spark layer is gated.
+
+```
+export BW_PG_DSN='postgresql://warehouse:<password>@<g7 tailnet IP>:5432/warehouse'
+python -m warehouse.load --warehouse data/warehouse --init-schema
+```
+
+The DSN carries a password, so it is read from the environment and never written
+into this repository or committed anywhere. Standing the database up on g7 is in
+`deploy/postgres/`.
 
 ## Open decisions
 
