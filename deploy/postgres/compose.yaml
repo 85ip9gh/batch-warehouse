@@ -14,7 +14,7 @@
 
 services:
   warehouse-db:
-    image: postgres:17.6-alpine
+    image: postgres:17-alpine
     container_name: warehouse-db
     restart: unless-stopped
     environment:

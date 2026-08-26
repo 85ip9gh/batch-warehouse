@@ -205,7 +205,11 @@ def connect(dsn: str | None = None):
     resolved = dsn or os.environ.get("BW_PG_DSN")
     if not resolved:
         raise SystemExit("no database: pass --dsn or set BW_PG_DSN")
-    return psycopg.connect(resolved)
+    # autocommit, so the `with conn.transaction()` blocks are the only
+    # transactions and apply_schema commits as it runs. Without it every
+    # statement joins one implicit transaction that conn.close() rolls back at
+    # the end: a load that prints its row counts and then quietly discards them.
+    return psycopg.connect(resolved, autocommit=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

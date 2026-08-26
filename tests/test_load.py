@@ -164,9 +164,13 @@ def _write_warehouse(root):
 @pytest.fixture
 def conn():
     _need_pg()
-    psycopg = pytest.importorskip("psycopg")
+    pytest.importorskip("psycopg")
     pytest.importorskip("pyarrow")
-    connection = psycopg.connect(DSN, autocommit=True)
+    # Through load.connect, not psycopg.connect, so the connection settings the
+    # CLI actually uses are the ones under test. An earlier fixture built its own
+    # autocommit connection and so passed while the CLI's own connection, on the
+    # psycopg default, rolled the whole load back on close.
+    connection = load.connect(DSN)
     connection.execute("DROP SCHEMA IF EXISTS wh CASCADE")
     load.apply_schema(connection)
     try:
