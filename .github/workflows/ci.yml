@@ -79,6 +79,46 @@ jobs:
           BW_REQUIRE_SPARK: "1"
         run: python -m pytest tests/test_transform.py -q
 
+  # The load's idempotency is a claim about what a real database does on a
+  # rerun, so it is tested against one rather than mocked. BW_REQUIRE_PG plays
+  # the same role BW_REQUIRE_SPARK does above: without it a missing psycopg or a
+  # missing DSN would skip the module and report green for an untested gate. The
+  # Postgres password here is a throwaway for an ephemeral service container, not
+  # a secret, and never leaves this file.
+  load-tests:
+    name: Load tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: warehouse
+          POSTGRES_PASSWORD: warehouse
+          POSTGRES_DB: warehouse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U warehouse -d warehouse"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v6.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install --requirement requirements-dev.txt --requirement requirements-load.txt
+
+      - name: Run load tests
+        env:
+          BW_REQUIRE_PG: "1"
+          BW_PG_DSN: "postgresql://warehouse:warehouse@localhost:5432/warehouse"
+        run: python -m pytest tests/test_load.py -q
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
