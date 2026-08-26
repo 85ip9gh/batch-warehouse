@@ -1,0 +1,6 @@
+# The load reads the Parquet warehouse and writes it into PostgreSQL. Neither
+# dependency is used by the transform or the conforming suite, so they live in
+# their own file and the fast tests stay dependency-free, the same split the
+# Spark requirements already keep.
+psycopg[binary]>=3.2,<4
+pyarrow>=17,<20

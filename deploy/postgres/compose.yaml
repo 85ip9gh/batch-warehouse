@@ -1,0 +1,43 @@
+# PostgreSQL for the batch warehouse, deployed on g7.
+#
+# Bound to a single address supplied at deploy time, never 0.0.0.0. On g7 that
+# address is the tailnet interface, the same boundary the other self-hosted
+# services use: the load on the workstation reaches it over the tailnet, and a
+# later read-only view reaches it over the Docker network. The bind address and
+# the password both come from a .env file that is never committed, so this
+# public file carries no internal address and no credential.
+#
+# Checkov has no docker_compose framework (verified against 3.3.13), so this
+# file is a manual review rather than a scanned one. The review points are the
+# three settings below: the pinned image, the :? guards that refuse to start on
+# a missing value, and no-new-privileges.
+
+services:
+  warehouse-db:
+    image: postgres:17.6-alpine
+    container_name: warehouse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: warehouse
+      POSTGRES_DB: warehouse
+      # :? so Compose refuses to start rather than defaulting a blank password,
+      # the same guard the vault MCP stack learned to keep.
+      POSTGRES_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?set WAREHOUSE_DB_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      # WAREHOUSE_DB_BIND is "ADDRESS:PORT", for example the tailnet IP and 5432.
+      # Kept out of the repo so the public file names no internal address.
+      - "${WAREHOUSE_DB_BIND:?set WAREHOUSE_DB_BIND in .env, e.g. 100.x.y.z:5432}:5432"
+    volumes:
+      - warehouse-pgdata:/var/lib/postgresql/data
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warehouse -d warehouse"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  warehouse-pgdata:
